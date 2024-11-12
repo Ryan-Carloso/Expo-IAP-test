@@ -9,6 +9,7 @@ import {
   SafeAreaView,
   ActivityIndicator,
   Alert,
+  Linking,
 } from "react-native";
 import {
   PurchaseError,
@@ -16,13 +17,12 @@ import {
   requestSubscription,
   useIAP,
   validateReceiptIos,
-  getProducts, // Add this for product details
-  endConnection, // Add this for cleanup
+  getProducts,
+  endConnection,
 } from "react-native-iap";
 
 const ITUNES_SHARED_SECRET = "0b906b40ae9b491db62b3d47bca358b4";
 
-// Define your SKUs - make sure these match exactly with App Store Connect
 const subscriptionSkus = Platform.select({
   ios: ["testiap299"],
   android: [],
@@ -43,7 +43,6 @@ export const Subscriptions = ({ navigation }) => {
   const [error, setError] = useState(null);
   const [connectionEstablished, setConnectionEstablished] = useState(false);
 
-  // Initialize IAP connection
   useEffect(() => {
     let isMounted = true;
 
@@ -51,7 +50,6 @@ export const Subscriptions = ({ navigation }) => {
       try {
         console.log("Starting IAP setup...");
         
-        // End any existing connections first
         try {
           await endConnection();
           console.log("Ended previous IAP connection");
@@ -59,7 +57,6 @@ export const Subscriptions = ({ navigation }) => {
           console.log("No previous connection to end:", endError);
         }
 
-        // Initialize new connection
         const result = await initConnection();
         console.log("IAP Connection initialized:", result);
         
@@ -82,14 +79,12 @@ export const Subscriptions = ({ navigation }) => {
 
     setupIAP();
 
-    // Cleanup
     return () => {
       isMounted = false;
-      endConnection(); // Clean up connection when component unmounts
+      endConnection();
     };
   }, []);
 
-  // Fetch subscriptions
   const fetchSubscriptions = async () => {
     if (!connectionEstablished) {
       console.log("Connection not established yet, skipping subscription fetch");
@@ -100,7 +95,6 @@ export const Subscriptions = ({ navigation }) => {
       console.log("Fetching subscription products...");
       setLoading(true);
       
-      // First try to get products to verify SKUs
       const products = await getProducts({ skus: subscriptionSkus });
       console.log("Available products:", products);
 
@@ -109,7 +103,6 @@ export const Subscriptions = ({ navigation }) => {
         throw new Error("No products available for purchase");
       }
 
-      // Then get subscription details
       const subs = await getSubscriptions({ skus: subscriptionSkus });
       console.log("Subscription details:", subs);
 
@@ -130,7 +123,6 @@ export const Subscriptions = ({ navigation }) => {
     }
   };
 
-  // Fetch purchase history
   const fetchPurchaseHistory = async () => {
     if (!connectionEstablished) {
       console.log("Connection not established yet, skipping history fetch");
@@ -150,12 +142,10 @@ export const Subscriptions = ({ navigation }) => {
 
     } catch (error) {
       console.error("Purchase history error:", error);
-      // Don't show alert for purchase history errors as it's not critical
       console.warn(`Purchase history fetch failed: ${error.message || 'Unknown error'}`);
     }
   };
 
-  // Effect to fetch data when connection is established
   useEffect(() => {
     if (connectionEstablished && connected) {
       console.log("Connection established, fetching initial data...");
@@ -164,37 +154,62 @@ export const Subscriptions = ({ navigation }) => {
     }
   }, [connectionEstablished, connected]);
 
-  // Handle subscription purchase
+  const processPurchase = async (productId) => {
+    const purchase = await requestSubscription({
+      sku: productId,
+      andDangerouslyFinishTransactionAutomaticallyIOS: false,
+    });
+
+    console.log("Purchase response:", purchase);
+
+    if (Platform.OS === 'ios' && purchase?.transactionReceipt) {
+      await validateReceiptIos({
+        receiptBody: {
+          "receipt-data": purchase.transactionReceipt,
+          password: ITUNES_SHARED_SECRET,
+        },
+        isTest: __DEV__,
+      });
+    }
+
+    await finishTransaction({ purchase, isConsumable: false });
+    console.log("Transaction finished successfully");
+    
+    Alert.alert(
+      "Success",
+      "Thank you for your purchase!",
+      [{ text: "OK", onPress: () => navigation.navigate("Home") }]
+    );
+  };
+
   const handleSubscription = async (productId) => {
     try {
       setLoading(true);
       console.log("Initiating subscription purchase for:", productId);
 
-      const purchase = await requestSubscription({
-        sku: productId,
-        andDangerouslyFinishTransactionAutomaticallyIOS: false,
-      });
-
-      console.log("Purchase response:", purchase);
-
-      if (Platform.OS === 'ios' && purchase?.transactionReceipt) {
-        await validateReceiptIos({
-          receiptBody: {
-            "receipt-data": purchase.transactionReceipt,
-            password: ITUNES_SHARED_SECRET,
-          },
-          isTest: __DEV__,
-        });
+      if (Platform.OS === 'ios' && __DEV__) {
+        Alert.alert(
+          "Sandbox Testing",
+          "Please ensure you're signed in with a Sandbox Apple ID in device Settings before proceeding.",
+          [
+            {
+              text: "Open Settings",
+              onPress: () => Linking.openSettings(),
+            },
+            {
+              text: "Continue",
+              onPress: async () => await processPurchase(productId),
+            },
+            {
+              text: "Cancel",
+              style: "cancel",
+            }
+          ]
+        );
+        return;
       }
 
-      await finishTransaction({ purchase, isConsumable: false });
-      console.log("Transaction finished successfully");
-      
-      Alert.alert(
-        "Success",
-        "Thank you for your purchase!",
-        [{ text: "OK", onPress: () => navigation.navigate("Home") }]
-      );
+      await processPurchase(productId);
 
     } catch (error) {
       console.error("Purchase error:", error);
@@ -224,7 +239,6 @@ export const Subscriptions = ({ navigation }) => {
     }
   };
 
-  // Render methods...
   const renderLoadingState = () => (
     <View style={styles.centerContainer}>
       <ActivityIndicator size="large" color="#0071bc" />
@@ -329,38 +343,39 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
     shadowRadius: 4,
-    elevation: 3,
+    elevation: 4,
   },
   subscriptionTitle: {
     fontSize: 18,
     fontWeight: 'bold',
-    marginBottom: 8,
   },
   subscriptionPrice: {
     fontSize: 16,
-    color: '#666',
-    marginBottom: 8,
+    color: '#0071bc',
+    marginVertical: 8,
   },
   subscriptionDescription: {
     fontSize: 14,
-    color: '#444',
-    marginBottom: 16,
+    color: '#666',
   },
   subscribeButton: {
-    backgroundColor: 'mediumseagreen',
+    backgroundColor: '#0071bc',
     padding: 12,
     borderRadius: 8,
-    alignItems: 'center',
+    marginTop: 10,
   },
   buttonText: {
     color: 'white',
     fontSize: 16,
     fontWeight: 'bold',
+    textAlign: 'center',
   },
   noSubscriptionsText: {
-    textAlign: 'center',
     fontSize: 16,
+    textAlign: 'center',
     color: '#666',
-    marginTop: 20,
+    marginTop: 30,
   },
 });
+
+export default Subscriptions;
