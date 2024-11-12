@@ -12,11 +12,9 @@ import {
   Linking,
 } from "react-native";
 import {
-  PurchaseError,
   initConnection,
   requestSubscription,
   useIAP,
-  validateReceiptIos,
   getProducts,
   endConnection,
 } from "react-native-iap";
@@ -24,7 +22,7 @@ import {
 const ITUNES_SHARED_SECRET = "0b906b40ae9b491db62b3d47bca358b4";
 
 const subscriptionSkus = Platform.select({
-  ios: ["testiap299"],
+  ios: ["testiap299"], // Certifique-se de que este SKU está correto
   android: [],
 });
 
@@ -35,7 +33,6 @@ export const Subscriptions = ({ navigation }) => {
     getSubscriptions,
     currentPurchase,
     finishTransaction,
-    purchaseHistory,
     getPurchaseHistory,
   } = useIAP();
 
@@ -49,7 +46,7 @@ export const Subscriptions = ({ navigation }) => {
     const setupIAP = async () => {
       try {
         console.log("Starting IAP setup...");
-        
+
         try {
           await endConnection();
           console.log("Ended previous IAP connection");
@@ -59,12 +56,11 @@ export const Subscriptions = ({ navigation }) => {
 
         const result = await initConnection();
         console.log("IAP Connection initialized:", result);
-        
+
         if (isMounted) {
           setConnectionEstablished(true);
           console.log("IAP setup complete");
         }
-
       } catch (error) {
         console.error("IAP setup failed:", error);
         if (isMounted) {
@@ -94,7 +90,7 @@ export const Subscriptions = ({ navigation }) => {
     try {
       console.log("Fetching subscription products...");
       setLoading(true);
-      
+
       const products = await getProducts({ skus: subscriptionSkus });
       console.log("Available products:", products);
 
@@ -103,14 +99,16 @@ export const Subscriptions = ({ navigation }) => {
         throw new Error("No products available for purchase");
       }
 
-      const subs = await getSubscriptions({ skus: subscriptionSkus });
-      console.log("Subscription details:", subs);
+      // Verifique se o produto é realmente uma assinatura
+      const validSubscriptions = products.filter(
+        (product) => product.type === "subs"
+      );
 
-      if (!subs || subs.length === 0) {
-        console.log("No subscriptions found");
+      if (validSubscriptions.length === 0) {
         throw new Error("No subscription products available");
       }
 
+      console.log("Valid subscriptions:", validSubscriptions);
     } catch (error) {
       console.error("Subscription fetch error:", error);
       setError(`Failed to load subscriptions: ${error.message || 'Unknown error'}`);
@@ -123,117 +121,27 @@ export const Subscriptions = ({ navigation }) => {
     }
   };
 
-  const fetchPurchaseHistory = async () => {
-    if (!connectionEstablished) {
-      console.log("Connection not established yet, skipping history fetch");
-      return;
-    }
-
-    try {
-      console.log("Fetching purchase history...");
-      const history = await getPurchaseHistory();
-      console.log("Purchase history retrieved:", history);
-      
-      if (history && history.length > 0) {
-        console.log("Active purchases found:", history.length);
-      } else {
-        console.log("No previous purchases found");
-      }
-
-    } catch (error) {
-      console.error("Purchase history error:", error);
-      console.warn(`Purchase history fetch failed: ${error.message || 'Unknown error'}`);
-    }
-  };
-
   useEffect(() => {
     if (connectionEstablished && connected) {
       console.log("Connection established, fetching initial data...");
       fetchSubscriptions();
-      fetchPurchaseHistory();
     }
   }, [connectionEstablished, connected]);
-
-  const processPurchase = async (productId) => {
-    const purchase = await requestSubscription({
-      sku: productId,
-      andDangerouslyFinishTransactionAutomaticallyIOS: false,
-    });
-
-    console.log("Purchase response:", purchase);
-
-    if (Platform.OS === 'ios' && purchase?.transactionReceipt) {
-      await validateReceiptIos({
-        receiptBody: {
-          "receipt-data": purchase.transactionReceipt,
-          password: ITUNES_SHARED_SECRET,
-        },
-        isTest: __DEV__,
-      });
-    }
-
-    await finishTransaction({ purchase, isConsumable: false });
-    console.log("Transaction finished successfully");
-    
-    Alert.alert(
-      "Success",
-      "Thank you for your purchase!",
-      [{ text: "OK", onPress: () => navigation.navigate("Home") }]
-    );
-  };
 
   const handleSubscription = async (productId) => {
     try {
       setLoading(true);
       console.log("Initiating subscription purchase for:", productId);
 
-      if (Platform.OS === 'ios' && __DEV__) {
-        Alert.alert(
-          "Sandbox Testing",
-          "Please ensure you're signed in with a Sandbox Apple ID in device Settings before proceeding.",
-          [
-            {
-              text: "Open Settings",
-              onPress: () => Linking.openSettings(),
-            },
-            {
-              text: "Continue",
-              onPress: async () => await processPurchase(productId),
-            },
-            {
-              text: "Cancel",
-              style: "cancel",
-            }
-          ]
-        );
-        return;
-      }
+      await requestSubscription({
+        sku: productId,
+        andDangerouslyFinishTransactionAutomaticallyIOS: false,
+      });
 
-      await processPurchase(productId);
-
+      Alert.alert("Success", "Thank you for your purchase!");
     } catch (error) {
       console.error("Purchase error:", error);
-      let errorMessage = "Purchase failed. Please try again later.";
-      
-      if (error instanceof PurchaseError) {
-        console.error(`Purchase error code: ${error.code}, message: ${error.message}`);
-        
-        switch (error.code) {
-          case 'E_USER_CANCELLED':
-            errorMessage = "Purchase was cancelled.";
-            break;
-          case 'E_ALREADY_OWNED':
-            errorMessage = "You already own this subscription.";
-            break;
-          case 'E_NOT_PREPARED':
-            errorMessage = "Store is not ready. Please try again.";
-            break;
-          default:
-            errorMessage = `Purchase failed: ${error.message}`;
-        }
-      }
-      
-      Alert.alert("Purchase Failed", errorMessage);
+      Alert.alert("Purchase Failed", `Error: ${error.message}`);
     } finally {
       setLoading(false);
     }
