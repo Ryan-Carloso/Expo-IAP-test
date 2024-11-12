@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "testiap2.0",
-    "slug": "testiap2.0",
+    "name": "testiap",
+    "slug": "testiap",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -24,6 +24,11 @@
     },
     "web": {
       "favicon": "./assets/favicon.png"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "01e8ca71-5e85-4faa-bfbc-46f28d8708ee"
+      }
     }
   }
 }

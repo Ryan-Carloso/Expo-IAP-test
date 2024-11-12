@@ -8,22 +8,24 @@ import {
   TouchableOpacity,
   SafeAreaView,
   ActivityIndicator,
+  Alert,
 } from "react-native";
 import {
   PurchaseError,
+  initConnection,
   requestSubscription,
   useIAP,
   validateReceiptIos,
+  getProducts, // Add this for product details
+  endConnection, // Add this for cleanup
 } from "react-native-iap";
 
 const ITUNES_SHARED_SECRET = "0b906b40ae9b491db62b3d47bca358b4";
 
-const errorLog = ({ message, error }) => {
-  console.error("An error happened:", message, error);
-};
-
+// Define your SKUs - make sure these match exactly with App Store Connect
 const subscriptionSkus = Platform.select({
   ios: ["testiap299"],
+  android: [],
 });
 
 export const Subscriptions = ({ navigation }) => {
@@ -38,253 +40,327 @@ export const Subscriptions = ({ navigation }) => {
   } = useIAP();
 
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [connectionEstablished, setConnectionEstablished] = useState(false);
 
-  const handleGetPurchaseHistory = async () => {
-    try {
-      console.log("Retrieving purchase history...");
-      await getPurchaseHistory();
-      console.log("Purchase history:", purchaseHistory);
-    } catch (error) {
-      errorLog({ message: "handleGetPurchaseHistory", error });
-    }
-  };
-
+  // Initialize IAP connection
   useEffect(() => {
-    console.log("Connected:", connected);
-    if (!connected) {
-      console.log("IAP not connected.");
-    }
-    handleGetPurchaseHistory();
-  }, [connected]);
+    let isMounted = true;
 
-  const handleGetSubscriptions = async () => {
-    try {
-      console.log("Getting subscriptions...");
-      await getSubscriptions({ skus: subscriptionSkus });
-      console.log("Subscriptions retrieved:", subscriptions);
-    } catch (error) {
-      errorLog({ message: "handleGetSubscriptions", error });
-    }
-  };
-
-  useEffect(() => {
-    handleGetSubscriptions();
-  }, [connected]);
-
-  useEffect(() => {
-    if (
-      purchaseHistory.find(
-        (x) => x.productId === (subscriptionSkus[0] || subscriptionSkus[1])
-      )
-    ) {
-      console.log("Purchase found, navigating to Home...");
-      navigation.navigate("Home");
-    }
-  }, [connected, purchaseHistory, subscriptions]);
-
-  const handleBuySubscription = async (productId) => {
-    try {
-      console.log("Requesting subscription for product:", productId);
-      await requestSubscription({ sku: productId });
-      setLoading(false);
-    } catch (error) {
-      setLoading(false);
-      if (error instanceof PurchaseError) {
-        errorLog({ message: `[${error.code}]: ${error.message}`, error });
-      } else {
-        errorLog({ message: "handleBuySubscription", error });
-      }
-    }
-  };
-
-  useEffect(() => {
-    const checkCurrentPurchase = async (purchase) => {
-      if (purchase) {
+    const setupIAP = async () => {
+      try {
+        console.log("Starting IAP setup...");
+        
+        // End any existing connections first
         try {
-          console.log("Current purchase detected:", purchase);
-          const receipt = purchase.transactionReceipt;
-          if (receipt) {
-            const isTestEnvironment = __DEV__;
-            const appleReceiptResponse = await validateReceiptIos(
-              {
-                "receipt-data": receipt,
-                password: ITUNES_SHARED_SECRET,
-              },
-              isTestEnvironment
-            );
-            console.log("Apple receipt response:", appleReceiptResponse);
-            if (appleReceiptResponse) {
-              const { status } = appleReceiptResponse;
-              if (status) {
-                navigation.navigate("Home");
-              }
-            }
-          }
-        } catch (error) {
-          errorLog({ message: "checkCurrentPurchase", error });
+          await endConnection();
+          console.log("Ended previous IAP connection");
+        } catch (endError) {
+          console.log("No previous connection to end:", endError);
+        }
+
+        // Initialize new connection
+        const result = await initConnection();
+        console.log("IAP Connection initialized:", result);
+        
+        if (isMounted) {
+          setConnectionEstablished(true);
+          console.log("IAP setup complete");
+        }
+
+      } catch (error) {
+        console.error("IAP setup failed:", error);
+        if (isMounted) {
+          setError(`IAP initialization failed: ${error.message || 'Unknown error'}`);
+          Alert.alert(
+            "Setup Error",
+            "Failed to initialize in-app purchases. Please try again later."
+          );
         }
       }
     };
-    checkCurrentPurchase(currentPurchase);
-  }, [currentPurchase, finishTransaction]);
+
+    setupIAP();
+
+    // Cleanup
+    return () => {
+      isMounted = false;
+      endConnection(); // Clean up connection when component unmounts
+    };
+  }, []);
+
+  // Fetch subscriptions
+  const fetchSubscriptions = async () => {
+    if (!connectionEstablished) {
+      console.log("Connection not established yet, skipping subscription fetch");
+      return;
+    }
+
+    try {
+      console.log("Fetching subscription products...");
+      setLoading(true);
+      
+      // First try to get products to verify SKUs
+      const products = await getProducts({ skus: subscriptionSkus });
+      console.log("Available products:", products);
+
+      if (!products || products.length === 0) {
+        console.log("No products found for SKUs:", subscriptionSkus);
+        throw new Error("No products available for purchase");
+      }
+
+      // Then get subscription details
+      const subs = await getSubscriptions({ skus: subscriptionSkus });
+      console.log("Subscription details:", subs);
+
+      if (!subs || subs.length === 0) {
+        console.log("No subscriptions found");
+        throw new Error("No subscription products available");
+      }
+
+    } catch (error) {
+      console.error("Subscription fetch error:", error);
+      setError(`Failed to load subscriptions: ${error.message || 'Unknown error'}`);
+      Alert.alert(
+        "Loading Error",
+        "Unable to load subscription products. Please check your internet connection and try again."
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Fetch purchase history
+  const fetchPurchaseHistory = async () => {
+    if (!connectionEstablished) {
+      console.log("Connection not established yet, skipping history fetch");
+      return;
+    }
+
+    try {
+      console.log("Fetching purchase history...");
+      const history = await getPurchaseHistory();
+      console.log("Purchase history retrieved:", history);
+      
+      if (history && history.length > 0) {
+        console.log("Active purchases found:", history.length);
+      } else {
+        console.log("No previous purchases found");
+      }
+
+    } catch (error) {
+      console.error("Purchase history error:", error);
+      // Don't show alert for purchase history errors as it's not critical
+      console.warn(`Purchase history fetch failed: ${error.message || 'Unknown error'}`);
+    }
+  };
+
+  // Effect to fetch data when connection is established
+  useEffect(() => {
+    if (connectionEstablished && connected) {
+      console.log("Connection established, fetching initial data...");
+      fetchSubscriptions();
+      fetchPurchaseHistory();
+    }
+  }, [connectionEstablished, connected]);
+
+  // Handle subscription purchase
+  const handleSubscription = async (productId) => {
+    try {
+      setLoading(true);
+      console.log("Initiating subscription purchase for:", productId);
+
+      const purchase = await requestSubscription({
+        sku: productId,
+        andDangerouslyFinishTransactionAutomaticallyIOS: false,
+      });
+
+      console.log("Purchase response:", purchase);
+
+      if (Platform.OS === 'ios' && purchase?.transactionReceipt) {
+        await validateReceiptIos({
+          receiptBody: {
+            "receipt-data": purchase.transactionReceipt,
+            password: ITUNES_SHARED_SECRET,
+          },
+          isTest: __DEV__,
+        });
+      }
+
+      await finishTransaction({ purchase, isConsumable: false });
+      console.log("Transaction finished successfully");
+      
+      Alert.alert(
+        "Success",
+        "Thank you for your purchase!",
+        [{ text: "OK", onPress: () => navigation.navigate("Home") }]
+      );
+
+    } catch (error) {
+      console.error("Purchase error:", error);
+      let errorMessage = "Purchase failed. Please try again later.";
+      
+      if (error instanceof PurchaseError) {
+        console.error(`Purchase error code: ${error.code}, message: ${error.message}`);
+        
+        switch (error.code) {
+          case 'E_USER_CANCELLED':
+            errorMessage = "Purchase was cancelled.";
+            break;
+          case 'E_ALREADY_OWNED':
+            errorMessage = "You already own this subscription.";
+            break;
+          case 'E_NOT_PREPARED':
+            errorMessage = "Store is not ready. Please try again.";
+            break;
+          default:
+            errorMessage = `Purchase failed: ${error.message}`;
+        }
+      }
+      
+      Alert.alert("Purchase Failed", errorMessage);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Render methods...
+  const renderLoadingState = () => (
+    <View style={styles.centerContainer}>
+      <ActivityIndicator size="large" color="#0071bc" />
+      <Text style={styles.loadingText}>Loading subscriptions...</Text>
+    </View>
+  );
+
+  const renderError = () => (
+    <View style={styles.centerContainer}>
+      <Text style={styles.errorText}>{error}</Text>
+      <TouchableOpacity
+        style={styles.retryButton}
+        onPress={() => {
+          setError(null);
+          fetchSubscriptions();
+        }}
+      >
+        <Text style={styles.retryButtonText}>Retry</Text>
+      </TouchableOpacity>
+    </View>
+  );
+
+  const renderSubscriptions = () => (
+    <ScrollView>
+      <View style={styles.container}>
+        {subscriptions && subscriptions.length > 0 ? (
+          subscriptions.map((subscription, index) => (
+            <View key={index} style={styles.subscriptionCard}>
+              <Text style={styles.subscriptionTitle}>{subscription.title}</Text>
+              <Text style={styles.subscriptionPrice}>{subscription.localizedPrice}</Text>
+              <Text style={styles.subscriptionDescription}>{subscription.description}</Text>
+              <TouchableOpacity
+                style={styles.subscribeButton}
+                onPress={() => handleSubscription(subscription.productId)}
+                disabled={loading}
+              >
+                <Text style={styles.buttonText}>
+                  {loading ? "Processing..." : "Subscribe"}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          ))
+        ) : (
+          <Text style={styles.noSubscriptionsText}>
+            No subscription products available
+          </Text>
+        )}
+      </View>
+    </ScrollView>
+  );
 
   return (
-    <SafeAreaView>
-      <ScrollView>
-        <View style={{ padding: 10 }}>
-          <Text
-            style={{
-              fontSize: 28,
-              textAlign: "center",
-              paddingBottom: 15,
-              color: "black",
-              fontWeight: "bold",
-            }}
-          >
-            Subscribe
-          </Text>
-          <Text style={styles.listItem}>
-            Subscribe to some cool stuff today.
-          </Text>
-          <Text
-            style={{
-              fontWeight: "500",
-              textAlign: "center",
-              marginTop: 10,
-              fontSize: 18,
-            }}
-          >
-            Choose your membership plan.
-          </Text>
-          <View style={{ marginTop: 10 }}>
-            {subscriptions.map((subscription, index) => {
-              const owned = purchaseHistory.find(
-                (s) => s?.productId === subscription.productId
-              );
-              console.log("subscriptions", subscription?.productId);
-              return (
-                <View style={styles.box} key={index}>
-                  {subscription?.introductoryPriceSubscriptionPeriodIOS && (
-                    <>
-                      <Text style={styles.specialTag}>SPECIAL OFFER</Text>
-                    </>
-                  )}
-                  <View
-                    style={{
-                      flex: 1,
-                      flexDirection: "row",
-                      justifyContent: "space-between",
-                      marginTop: 10,
-                    }}
-                  >
-                    <Text
-                      style={{
-                        paddingBottom: 10,
-                        fontWeight: "bold",
-                        fontSize: 18,
-                        textTransform: "uppercase",
-                      }}
-                    >
-                      {subscription?.title}
-                    </Text>
-                    <Text
-                      style={{
-                        paddingBottom: 20,
-                        fontWeight: "bold",
-                        fontSize: 18,
-                      }}
-                    >
-                      {subscription?.localizedPrice}
-                    </Text>
-                  </View>
-                  {subscription?.introductoryPriceSubscriptionPeriodIOS && (
-                    <Text>
-                      Free for 1{" "}
-                      {subscription?.introductoryPriceSubscriptionPeriodIOS}
-                    </Text>
-                  )}
-                  <Text style={{ paddingBottom: 20 }}>
-                    {subscription?.description}
-                  </Text>
-                  {owned && (
-                    <Text style={{ textAlign: "center", marginBottom: 10 }}>
-                      You are Subscribed to this plan!
-                    </Text>
-                  )}
-                  {owned && (
-                    <TouchableOpacity
-                      style={[styles.button, { backgroundColor: "#0071bc" }]}
-                      onPress={() => {
-                        navigation.navigate("Home");
-                      }}
-                    >
-                      <Text style={styles.buttonText}>Continue to App</Text>
-                    </TouchableOpacity>
-                  )}
-                  {loading && <ActivityIndicator size="large" />}
-                  {!loading && !owned && (
-                    <TouchableOpacity
-                      style={styles.button}
-                      onPress={() => {
-                        setLoading(true);
-                        handleBuySubscription(subscription.productId);
-                      }}
-                    >
-                      <Text style={styles.buttonText}>Subscribe</Text>
-                    </TouchableOpacity>
-                  )}
-                </View>
-              );
-            })}
-          </View>
-        </View>
-      </ScrollView>
+    <SafeAreaView style={styles.safeArea}>
+      {loading ? renderLoadingState() :
+       error ? renderError() :
+       renderSubscriptions()}
     </SafeAreaView>
   );
 };
 
 const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+    backgroundColor: '#f5f5f5',
+  },
+  centerContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
   container: {
+    padding: 16,
+  },
+  loadingText: {
+    marginTop: 10,
+    fontSize: 16,
+    color: '#666',
+  },
+  errorText: {
+    color: 'red',
+    textAlign: 'center',
     marginBottom: 20,
   },
-  listItem: {
-    fontSize: 16,
-    paddingLeft: 8,
-    paddingBottom: 3,
-    textAlign: "center",
-    color: "black",
-  },
-  box: {
-    margin: 10,
-    marginBottom: 5,
-    padding: 10,
-    backgroundColor: "white",
-    borderRadius: 7,
-    shadowColor: "rgba(0, 0, 0, 0.45)",
-    shadowOffset: { height: 16, width: 0 },
-    shadowOpacity: 0.1,
-    shadowRadius: 12,
-  },
-  button: {
-    alignItems: "center",
-    backgroundColor: "mediumseagreen",
+  retryButton: {
+    backgroundColor: '#0071bc',
+    padding: 12,
     borderRadius: 8,
-    padding: 10,
+    marginTop: 10,
+  },
+  retryButtonText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  subscriptionCard: {
+    backgroundColor: 'white',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  subscriptionTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    marginBottom: 8,
+  },
+  subscriptionPrice: {
+    fontSize: 16,
+    color: '#666',
+    marginBottom: 8,
+  },
+  subscriptionDescription: {
+    fontSize: 14,
+    color: '#444',
+    marginBottom: 16,
+  },
+  subscribeButton: {
+    backgroundColor: 'mediumseagreen',
+    padding: 12,
+    borderRadius: 8,
+    alignItems: 'center',
   },
   buttonText: {
+    color: 'white',
     fontSize: 16,
-    fontWeight: "bold",
-    color: "white",
-    textTransform: "uppercase",
+    fontWeight: 'bold',
   },
-  specialTag: {
-    color: "white",
-    backgroundColor: "crimson",
-    width: 125,
-    padding: 4,
-    fontWeight: "bold",
-    fontSize: 12,
-    borderRadius: 7,
-    marginBottom: 2,
+  noSubscriptionsText: {
+    textAlign: 'center',
+    fontSize: 16,
+    color: '#666',
+    marginTop: 20,
   },
 });
