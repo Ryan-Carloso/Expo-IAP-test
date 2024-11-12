@@ -9,7 +9,7 @@ import {
   SafeAreaView,
   ActivityIndicator,
   Alert,
-  Linking,
+  Dimensions,
 } from "react-native";
 import {
   initConnection,
@@ -19,11 +19,13 @@ import {
   endConnection,
 } from "react-native-iap";
 
+const { width } = Dimensions.get('window');
+
 const ITUNES_SHARED_SECRET = "0b906b40ae9b491db62b3d47bca358b4";
 
 const subscriptionSkus = Platform.select({
-  ios: ["testiap299"], // Certifique-se de que este SKU está correto
-  android: [],
+  ios: ["testiap299"], 
+  android: ["androidTestSku"],
 });
 
 export const Subscriptions = ({ navigation }) => {
@@ -39,6 +41,8 @@ export const Subscriptions = ({ navigation }) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [connectionEstablished, setConnectionEstablished] = useState(false);
+  const [availableSubscriptions, setAvailableSubscriptions] = useState([]);
+  const [subscribedProducts, setSubscribedProducts] = useState([]);
 
   useEffect(() => {
     let isMounted = true;
@@ -47,12 +51,8 @@ export const Subscriptions = ({ navigation }) => {
       try {
         console.log("Starting IAP setup...");
 
-        try {
-          await endConnection();
-          console.log("Ended previous IAP connection");
-        } catch (endError) {
-          console.log("No previous connection to end:", endError);
-        }
+        await endConnection();
+        console.log("Ended previous IAP connection");
 
         const result = await initConnection();
         console.log("IAP Connection initialized:", result);
@@ -99,7 +99,6 @@ export const Subscriptions = ({ navigation }) => {
         throw new Error("No products available for purchase");
       }
 
-      // Verifique se o produto é realmente uma assinatura
       const validSubscriptions = products.filter(
         (product) => product.type === "subs"
       );
@@ -108,7 +107,10 @@ export const Subscriptions = ({ navigation }) => {
         throw new Error("No subscription products available");
       }
 
-      console.log("Valid subscriptions:", validSubscriptions);
+      setAvailableSubscriptions(validSubscriptions);
+      
+      // Simulating subscribed products for demonstration
+      setSubscribedProducts([validSubscriptions[0].productId]);
     } catch (error) {
       console.error("Subscription fetch error:", error);
       setError(`Failed to load subscriptions: ${error.message || 'Unknown error'}`);
@@ -129,6 +131,11 @@ export const Subscriptions = ({ navigation }) => {
   }, [connectionEstablished, connected]);
 
   const handleSubscription = async (productId) => {
+    if (subscribedProducts.includes(productId)) {
+      Alert.alert("Already Subscribed", "You are already subscribed to this plan.");
+      return;
+    }
+
     try {
       setLoading(true);
       console.log("Initiating subscription purchase for:", productId);
@@ -139,6 +146,7 @@ export const Subscriptions = ({ navigation }) => {
       });
 
       Alert.alert("Success", "Thank you for your purchase!");
+      setSubscribedProducts([...subscribedProducts, productId]);
     } catch (error) {
       console.error("Purchase error:", error);
       Alert.alert("Purchase Failed", `Error: ${error.message}`);
@@ -170,31 +178,34 @@ export const Subscriptions = ({ navigation }) => {
   );
 
   const renderSubscriptions = () => (
-    <ScrollView>
-      <View style={styles.container}>
-        {subscriptions && subscriptions.length > 0 ? (
-          subscriptions.map((subscription, index) => (
-            <View key={index} style={styles.subscriptionCard}>
-              <Text style={styles.subscriptionTitle}>{subscription.title}</Text>
-              <Text style={styles.subscriptionPrice}>{subscription.localizedPrice}</Text>
-              <Text style={styles.subscriptionDescription}>{subscription.description}</Text>
-              <TouchableOpacity
-                style={styles.subscribeButton}
-                onPress={() => handleSubscription(subscription.productId)}
-                disabled={loading}
-              >
-                <Text style={styles.buttonText}>
-                  {loading ? "Processing..." : "Subscribe"}
-                </Text>
-              </TouchableOpacity>
-            </View>
-          ))
-        ) : (
-          <Text style={styles.noSubscriptionsText}>
-            No subscription products available
-          </Text>
-        )}
-      </View>
+    <ScrollView contentContainerStyle={styles.scrollContainer}>
+      {availableSubscriptions && availableSubscriptions.length > 0 ? 
+        availableSubscriptions.map((subscription, index) => (
+          <View key={index} style={styles.subscriptionCard}>
+            <Text style={styles.subscriptionTitle}>{subscription.title}</Text>
+            <Text style={styles.subscriptionPrice}>{subscription.localizedPrice}</Text>
+            <Text style={styles.subscriptionDescription}>{subscription.description}</Text>
+            <TouchableOpacity
+              style={[
+                styles.subscribeButton,
+                subscribedProducts.includes(subscription.productId) && styles.subscribedButton
+              ]}
+              onPress={() => handleSubscription(subscription.productId)}
+              disabled={loading || subscribedProducts.includes(subscription.productId)}
+            >
+              <Text style={styles.buttonText}>
+                {subscribedProducts.includes(subscription.productId)
+                  ? "Subscribed"
+                  : loading
+                  ? "Processing..."
+                  : "Subscribe"}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        ))
+      : 
+      <Text style={styles.noSubscriptionsText}>No subscriptions available</Text>
+    }
     </ScrollView>
   );
 
@@ -210,7 +221,7 @@ export const Subscriptions = ({ navigation }) => {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: '#f0f0f5',
   },
   centerContainer: {
     flex: 1,
@@ -218,7 +229,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     padding: 20,
   },
-  container: {
+  scrollContainer: {
     padding: 16,
   },
   loadingText: {
@@ -227,15 +238,16 @@ const styles = StyleSheet.create({
     color: '#666',
   },
   errorText: {
-    color: 'red',
+    color: '#ff6b6b',
     textAlign: 'center',
     marginBottom: 20,
+    fontSize: 16,
   },
   retryButton: {
     backgroundColor: '#0071bc',
-    padding: 12,
-    borderRadius: 8,
-    marginTop: 10, 
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    borderRadius: 25,
   },
   retryButtonText: {
     color: 'white',
@@ -244,45 +256,50 @@ const styles = StyleSheet.create({
   },
   subscriptionCard: {
     backgroundColor: 'white',
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 16,
+    borderRadius: 15,
+    padding: 20,
+    marginBottom: 20,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
     shadowRadius: 4,
-    elevation: 4,
+    elevation: 5,
   },
   subscriptionTitle: {
-    fontSize: 18,
+    fontSize: 22,
     fontWeight: 'bold',
+    color: '#333',
+    marginBottom: 8,
   },
   subscriptionPrice: {
-    fontSize: 16,
+    fontSize: 18,
     color: '#0071bc',
-    marginVertical: 8,
+    marginBottom: 12,
   },
   subscriptionDescription: {
     fontSize: 14,
     color: '#666',
+    marginBottom: 16,
   },
   subscribeButton: {
     backgroundColor: '#0071bc',
-    padding: 12,
-    borderRadius: 8,
-    marginTop: 10,
+    paddingVertical: 12,
+    borderRadius: 25,
+    alignItems: 'center',
+  },
+  subscribedButton: {
+    backgroundColor: '#4caf50',
   },
   buttonText: {
     color: 'white',
     fontSize: 16,
     fontWeight: 'bold',
-    textAlign: 'center',
   },
   noSubscriptionsText: {
     fontSize: 16,
     textAlign: 'center',
     color: '#666',
-    marginTop: 30,
+    marginTop: 20,
   },
 });
 
