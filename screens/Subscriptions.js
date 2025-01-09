@@ -21,7 +21,7 @@ import {
 
 const { width } = Dimensions.get('window');
 
-const ITUNES_SHARED_SECRET = "0b906b40ae9b491db62b3d47bca358b4";
+const ITUNES_SHARED_SECRET = "c3b2572aaae84d9c8ca0b06b782db96e";
 
 const subscriptionSkus = Platform.select({
   ios: ["testiap299"], 
